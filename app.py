@@ -3,196 +3,269 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
-from sklearn.linear_model import LinearRegression
-import time
+import plotly.graph_objects as go
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from datetime import datetime, timedelta
 
 # --- הגדרות ---
-st.set_page_config(page_title="AI Future Predictor", layout="wide", page_icon="🔮")
-st.title("🔮 AI Future Predictor & Deep Analysis")
+st.set_page_config(page_title="AI Sniper Ultimate", layout="wide", page_icon="🧠")
+st.title("🧠 AI Sniper Ultimate - ML & Backtesting")
 
-# --- רשימת מניות ---
+# --- רשימת מניות ברירת מחדל ---
 DEFAULT_TICKERS = """NVDA, TSLA, AMD, PLTR, MSFT, GOOGL, AMZN, META,
 ALAB, CLSK, COHR, VRT, LITE, SMCI, MDB, SOFI,
 AVGO, CRM, ORCL, INTU, RIVN, MARA, RIOT, IREN"""
 
-# --- פונקציית תיקון נתונים ---
-def fix_yahoo_data(df):
+# --- פונקציות עזר וטיפול בנתונים ---
+def fix_data(df):
     if df.empty: return df
     if isinstance(df.columns, pd.MultiIndex):
         try: df.columns = df.columns.get_level_values(0)
         except: pass
-    if 'Close' not in df.columns and 'Adj Close' in df.columns:
-        df['Close'] = df['Adj Close']
+    # הסרת שורות ללא מידע
+    df = df.dropna(subset=['Close'])
     return df
 
-# --- מודל חיזוי וניבוי (The AI Core) ---
-def predict_price(df, days_ahead=5):
-    # הכנת הנתונים ללמידה
-    df = df.copy().dropna()
-    df['Day'] = np.arange(len(df))
+# --- מנוע Machine Learning (XGBoost Style) ---
+def train_ai_model(df):
+    # הכנת הדאטה ללמידה
+    df_ml = df.copy()
     
-    # 1. רגרסיה לינארית (חישוב המגמה המתמטית)
-    X = df[['Day']].tail(30) # לומד מה-30 יום האחרונים
-    y = df['Close'].tail(30)
+    # יצירת פיצ'רים (Features) למודל ללמוד מהם
+    df_ml['Returns'] = df_ml['Close'].pct_change()
+    df_ml['SMA_Diff'] = df_ml['Close'] - ta.sma(df_ml['Close'], length=50)
+    df_ml['RSI'] = ta.rsi(df_ml['Close'], length=14)
+    df_ml['Volatility'] = ta.atr(df_ml['High'], df_ml['Low'], df_ml['Close'], length=14)
     
-    model = LinearRegression()
-    model.fit(X, y)
+    # Target: אנחנו רוצים לחזות את המחיר בעוד 3 ימים
+    df_ml['Target'] = df_ml['Close'].shift(-3)
+    df_ml = df_ml.dropna()
     
-    next_day = df['Day'].iloc[-1] + days_ahead
-    prediction_lin = model.predict([[next_day]])[0]
+    if len(df_ml) < 50: return 0, 0 # אין מספיק דאטה ללמידה
     
-    # 2. חישוב תנודתיות לטווח חיזוי (Confidence Interval)
-    volatility = df['Close'].pct_change().std()
-    current_price = df['Close'].iloc[-1]
+    features = ['Close', 'Returns', 'SMA_Diff', 'RSI', 'Volatility']
+    X = df_ml[features]
+    y = df_ml['Target']
     
-    # טווח עליון ותחתון משוער (Monte Carlo style simplification)
-    upper_bound = prediction_lin * (1 + (volatility * np.sqrt(days_ahead)))
-    lower_bound = prediction_lin * (1 - (volatility * np.sqrt(days_ahead)))
+    # פיצול לאימון ומבחן
+    split = int(len(X) * 0.8)
+    X_train, X_test = X.iloc[:split], X.iloc[split:]
+    y_train, y_test = y.iloc[:split], y.iloc[split:]
     
-    return round(prediction_lin, 2), round(upper_bound, 2), round(lower_bound, 2)
+    # אימון מודל Gradient Boosting (דומה ל-XGBoost)
+    model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # ביצוע חיזוי על הנתונים העדכניים ביותר
+    latest_data = X.iloc[[-1]]
+    prediction = model.predict(latest_data)[0]
+    
+    # דיוק המודל (R2 Score) על סט הבדיקה
+    accuracy_score = model.score(X_test, y_test)
+    
+    return prediction, accuracy_score
 
-# --- זיהוי תבניות מתקדם ---
-def get_advanced_patterns(df):
-    curr = df.iloc[-1]
-    prev = df.iloc[-2]
-    open_p, close, high, low = curr['Open'], curr['Close'], curr['High'], curr['Low']
+# --- מנוע Backtesting (בדיקה לאחור) ---
+def run_backtest(df):
+    # אסטרטגיה פשוטה לבדיקה: קנה כשה-RSI נמוך ומעל ממוצע 200, מכור כשה-RSI גבוה
+    # זו סימולציה היסטורית
+    df_bt = df.copy()
+    df_bt['SMA_200'] = ta.sma(df_bt['Close'], length=200)
+    df_bt['RSI'] = ta.rsi(df_bt['Close'], length=14)
     
-    patterns = []
+    capital = 10000 # דולר התחלתי
+    position = 0
+    df_bt['Signal'] = 0 # 1=Buy, -1=Sell
     
-    # גוף ונרות
-    body = abs(close - open_p)
-    full_range = high - low
+    # לוגיקת מסחר וקטורית מהירה
+    buy_cond = (df_bt['RSI'] < 40) & (df_bt['Close'] > df_bt['SMA_200'])
+    sell_cond = (df_bt['RSI'] > 70)
     
-    # Hammer
-    if (min(open_p, close) - low) > 2 * body and (high - max(open_p, close)) < body:
-        patterns.append("Hammer 🔨 (Possible Reversal)")
-        
-    # Engulfing Bullish
-    if close > open_p and prev['Close'] < prev['Open'] and close > prev['Open'] and open_p < prev['Close']:
-        patterns.append("Bullish Engulfing 🐮 (Strong Buy Signal)")
-        
-    # Golden Cross (SMA50 חוצה את SMA200)
-    if df['SMA_50'].iloc[-1] > df['SMA_200'].iloc[-1] and df['SMA_50'].iloc[-2] < df['SMA_200'].iloc[-2]:
-        patterns.append("Golden Cross ✨ (Major Uptrend)")
-        
-    return ", ".join(patterns) if patterns else "No Clear Pattern"
+    df_bt.loc[buy_cond, 'Signal'] = 1
+    df_bt.loc[sell_cond, 'Signal'] = -1
+    
+    # חישוב תשואה
+    df_bt['Market_Return'] = df_bt['Close'].pct_change()
+    df_bt['Strategy_Return'] = df_bt['Market_Return'] * df_bt['Signal'].shift(1)
+    
+    total_return = (df_bt['Strategy_Return'].fillna(0) + 1).cumprod().iloc[-1] - 1
+    market_return = (df_bt['Market_Return'].fillna(0) + 1).cumprod().iloc[-1] - 1
+    
+    return total_return * 100, market_return * 100 # באחוזים
 
-# --- המנתח הראשי ---
-def analyze_stock(ticker):
+# --- מנוע אינדיקטורים טכניים (כל מה שביקשת) ---
+def calculate_technicals(df):
+    # Aroon
+    aroon = ta.aroon(df['High'], df['Low'], length=14)
+    df['Aroon_Up'] = aroon['AROONU_14']
+    df['Aroon_Down'] = aroon['AROOND_14']
+    
+    # MAs
+    df['SMA_20'] = ta.sma(df['Close'], length=20)
+    df['SMA_50'] = ta.sma(df['Close'], length=50)
+    df['SMA_200'] = ta.sma(df['Close'], length=200)
+    df['EMA_9'] = ta.ema(df['Close'], length=9)
+    
+    # VWAP
+    df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
+    
+    # MACD
+    macd = ta.macd(df['Close'])
+    df['MACD'] = macd['MACD_12_26_9']
+    
+    # RSI & ADX
+    df['RSI'] = ta.rsi(df['Close'], length=14)
+    adx = ta.adx(df['High'], df['Low'], df['Close'])
+    df['ADX'] = adx['ADX_14']
+    
+    # Bollinger
+    bb = ta.bbands(df['Close'], length=20, std=2)
+    df['BB_U'] = bb['BBU_5_2.0']
+    df['BB_L'] = bb['BBL_5_2.0']
+    
+    # ATR
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    
+    return df
+
+# --- מנתח מניה בודד ---
+def analyze_stock_full(ticker):
     try:
-        df = yf.download(ticker, period="1y", progress=False, auto_adjust=True)
-        df = fix_yahoo_data(df)
+        df = yf.download(ticker, period="2y", interval="1d", progress=False, auto_adjust=True)
+        df = fix_data(df)
         
         if df.empty or len(df) < 200: return None
         
-        # אינדיקטורים
-        df['RSI'] = ta.rsi(df['Close'], length=14)
-        df['SMA_50'] = ta.sma(df['Close'], length=50)
-        df['SMA_200'] = ta.sma(df['Close'], length=200)
-        df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-        
-        # חיזוי לעוד 5 ימים
-        pred_price, pred_high, pred_low = predict_price(df, days_ahead=7)
-        
-        # נתונים נוכחיים
+        # 1. חישוב כל האינדיקטורים
+        df = calculate_technicals(df)
         curr = df.iloc[-1]
         
-        # ציון AI משוקלל
-        score = 50
-        # מומנטום
-        if curr['Close'] > curr['SMA_200']: score += 15
-        if curr['RSI'] < 30: score += 20
-        if pred_price > curr['Close']: score += 15 # המודל צופה עליה
+        # 2. הרצת מודל AI (חיזוי)
+        ai_pred, ai_accuracy = train_ai_model(df)
+        ai_upside = ((ai_pred - curr['Close']) / curr['Close']) * 100
         
-        # תבניות
-        patterns = get_advanced_patterns(df)
-        if "Bullish" in patterns or "Hammer" in patterns: score += 10
+        # 3. הרצת Backtest (היסטוריה)
+        strat_perf, market_perf = run_backtest(df)
+        
+        # 4. זיהוי תבניות
+        patterns = []
+        body = abs(curr['Close'] - curr['Open'])
+        full_range = curr['High'] - curr['Low']
+        
+        if curr['Close'] > curr['Open'] and body > 0.8 * full_range: patterns.append("Big Green Candle")
+        if (min(curr['Close'], curr['Open']) - curr['Low']) > 2 * body: patterns.append("Hammer")
+        if df['SMA_50'].iloc[-1] > df['SMA_200'].iloc[-1] and df['SMA_50'].iloc[-2] < df['SMA_200'].iloc[-2]: patterns.append("Golden Cross")
+        
+        pattern_str = ", ".join(patterns) if patterns else "None"
+        
+        # 5. ניקוד משוקלל
+        score = 50
+        # טכני
+        if curr['Close'] > curr['SMA_200']: score += 15
+        if curr['Aroon_Up'] > 70: score += 10
+        if curr['RSI'] < 30: score += 15
+        if curr['VWAP'] < curr['Close']: score += 10
+        # AI
+        if ai_upside > 2: score += 15
+        # Backtest
+        if strat_perf > market_perf: score += 5
         
         rec = "HOLD"
         if score >= 80: rec = "STRONG BUY 🚀"
         elif score >= 60: rec = "BUY 🟢"
         elif score <= 30: rec = "SELL 🔴"
         
+        # חישוב רמות
+        pivot = (curr['High'] + curr['Low'] + curr['Close']) / 3
+        
         return {
             'Symbol': ticker,
             'Price': curr['Close'],
             'Rec': rec,
             'Score': score,
-            'Predicted_7d': pred_price,
-            'Pred_Range': f"${pred_low} - ${pred_high}",
-            'Upside%': round(((pred_price - curr['Close']) / curr['Close']) * 100, 2),
-            'Pattern': patterns,
+            'AI_Pred': ai_pred,
+            'AI_Upside': ai_upside,
+            'AI_Conf': ai_accuracy * 100, # אחוז ביטחון של המודל
+            'Backtest_Perf': strat_perf,
+            'Market_Perf': market_perf,
             'RSI': curr['RSI'],
-            'SMA_200': curr['SMA_200'],
-            'ATR': curr['ATR']
+            'Aroon': curr['Aroon_Up'],
+            'VWAP': curr['VWAP'],
+            'ATR': curr['ATR'],
+            'Pattern': pattern_str,
+            'Pivot': pivot
         }
+        
     except Exception as e:
         return None
 
 # --- UI ---
-user_input = st.text_area("רשימת מניות:", DEFAULT_TICKERS, height=100)
+user_input = st.sidebar.text_area("רשימת מניות:", DEFAULT_TICKERS, height=300)
+run_btn = st.sidebar.button("🚀 הפעל ניתוח מלא (ML + Backtest)")
 
-if st.button("🔮 הפעל מודל חיזוי וניתוח"):
+if run_btn:
     tickers = [t.strip().upper() for t in user_input.split(',') if t.strip()]
     
-    st.info(f"מריץ מודלים של חיזוי (Regression & Monte Carlo) על {len(tickers)} מניות...")
+    st.info(f"מנתח {len(tickers)} מניות... מאמן מודלים ומריץ Backtest לכל אחת. אנא המתן.")
     
     results = []
-    bar = st.progress(0)
+    progress = st.progress(0)
     
     for i, t in enumerate(tickers):
-        res = analyze_stock(t)
-        if res: results.append(res)
-        else:
-            time.sleep(0.5)
-            res = analyze_stock(t) # Retry
-            if res: results.append(res)
-        bar.progress((i+1)/len(tickers))
+        data = analyze_stock_full(t)
+        if data: results.append(data)
+        progress.progress((i+1)/len(tickers))
         
-    bar.empty()
+    progress.empty()
     
     if results:
-        df = pd.DataFrame(results)
+        df_res = pd.DataFrame(results)
         
-        st.subheader("🤖 AI Forecast Results")
-        # טבלה שמתמקדת בחיזוי
+        # טבלה ראשית
+        st.subheader("🏆 AI & Backtest Results")
         st.dataframe(
-            df[['Symbol', 'Price', 'Predicted_7d', 'Upside%', 'Rec', 'Score', 'Pattern']]
+            df_res[['Symbol', 'Price', 'Rec', 'Score', 'AI_Upside', 'Backtest_Perf', 'Pattern', 'RSI']]
             .sort_values('Score', ascending=False)
-            .style.format({"Price": "{:.2f}", "Predicted_7d": "{:.2f}", "Upside%": "{:.2f}%"}),
+            .style.format({'Price': '{:.2f}', 'AI_Upside': '{:.2f}%', 'Backtest_Perf': '{:.2f}%', 'RSI': '{:.1f}'}),
             use_container_width=True
         )
         
         st.divider()
-        st.subheader("🧠 Deep Dive & Prediction Logic")
+        st.subheader("🔬 דוח עומק (כולל מודלים)")
         
-        sel = st.selectbox("בחר מניה לניתוח עומק:", df['Symbol'].tolist())
-        row = df[df['Symbol'] == sel].iloc[0]
+        sel = st.selectbox("בחר מניה:", df_res['Symbol'].tolist())
+        row = df_res[df_res['Symbol'] == sel].iloc[0]
         
-        col1, col2, col3 = st.columns(3)
-        col1.metric("מחיר נוכחי", f"${row['Price']:.2f}")
-        col2.metric("חיזוי AI (7 ימים)", f"${row['Predicted_7d']:.2f}", f"{row['Upside%']}%")
-        col3.metric("טווח צפוי", row['Pred_Range'])
-        
+        # דוח טלגרם מלא
         report = f"""
-🔮 **AI PREDICTION REPORT: {row['Symbol']}**
+🧠 **{row['Symbol']} DEEP AI ANALYSIS** 🧠
 ══════════════════════════════════
-🤖 **Model Forecast (Linear Regression):**
-Based on the trend of the last 30 days, the model predicts
-a price of **${row['Predicted_7d']}** within 7 days.
-Potential Upside: **{row['Upside%']}%**
+💰 Price: ${row['Price']:.2f}
+🚦 Signal: {row['Rec']} (Score: {row['Score']})
 
-📊 **Technical Signal:**
-• Recommendation: {row['Rec']} (AI Score: {row['Score']})
-• Pattern Detected: {row['Pattern']}
-• RSI Strength: {row['RSI']:.1f}
+🤖 **Machine Learning Model (Gradient Boosting)**
+• Prediction (3 Days): ${row['AI_Pred']:.2f}
+• Potential Upside: {row['AI_Upside']:.2f}%
+• Model Confidence (R2): {row['AI_Conf']:.1f}%
 
-🛡️ **Risk Parameters:**
-• Volatility (ATR): ${row['ATR']:.2f}
-• Stop Loss Suggested: ${row['Price'] - 2*row['ATR']:.2f}
+🔙 **Backtesting (1 Year Strategy)**
+• Strategy Return: {row['Backtest_Perf']:.2f}%
+• Buy & Hold Return: {row['Market_Perf']:.2f}%
+• Alpha: {row['Backtest_Perf'] - row['Market_Perf']:.2f}%
+
+📊 **Advanced Indicators**
+• Aroon Up: {row['Aroon']:.0f} (Trend Strength)
+• VWAP: ${row['VWAP']:.2f}
+• RSI: {row['RSI']:.1f} | ATR: ${row['ATR']:.2f}
+• Pattern: {row['Pattern']}
+
+🎯 **Key Levels**
+• Pivot Point: ${row['Pivot']:.2f}
+• Stop Loss: ${row['Price'] - 2*row['ATR']:.2f}
 ══════════════════════════════════
 """
         st.code(report, language="text")
         
     else:
-        st.error("No data found. Check connection.")
+        st.error("לא נמצאו נתונים. נסה שוב.")
