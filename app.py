@@ -23,15 +23,16 @@ st.markdown("""
 st.title("💎 AI Trading Command Center")
 st.markdown("מערכת סריקה יציבה | זיהוי תבניות | פיבונאצ'י | ללא קריסות")
 
-# --- רשימת המניות המלאה שלך (כטקסט כדי לא להעמיס על הזיכרון בהתחלה) ---
+# --- רשימת המניות (ברירת מחדל מצומצמת לבדיקה) ---
 DEFAULT_LIST = """NVDA, ALAB, CLSK, PLTR, AMD, TSLA, MSFT, UBER, MELI, DELL,
 VRT, COHR, LITE, SMCI, MDB, SOFI, GOOGL, AMZN, META, NFLX,
 AVGO, CRM, ORCL, INTU, RIVN, MARA, RIOT, IREN, HOOD, UPST,
 FICO, EQIX, SPY, AXON, SNPS, TLN, ETN, RDDT, SNOW, PANW,
-ICLR, VST, LRCX, DDOG, TWLO, BSX, NBIS, RBLX, AFARM, CELH"""
+ICLR, VST, LRCX, DDOG, TWLO, BSX, NBIS, RBLX, CELH"""
 
 # --- סרגל צד לשליטה ---
 st.sidebar.header("הגדרות סריקה")
+st.sidebar.info("טיפ: אם הסריקה נתקעת, נסה להקטין את כמות המניות בבת אחת.")
 user_tickers = st.sidebar.text_area("רשימת מניות (מופרדות בפסיק)", DEFAULT_LIST, height=300)
 scan_button = st.sidebar.button("🚀 הפעל סריקה עכשיו")
 
@@ -51,8 +52,9 @@ def analyze_stock_safe(ticker):
     try:
         # משיכת נתונים עם השהייה למניעת חסימה
         df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=True)
-        time.sleep(0.1) # נותן לשרת לנשום
+        time.sleep(0.1) # נותן לשרת לנשום בין מניה למניה
 
+        # תיקון לבעיית המבנה של יאהו
         if isinstance(df.columns, pd.MultiIndex):
             try: df = df.xs(ticker, axis=1, level=0)
             except: pass
@@ -121,6 +123,7 @@ def analyze_stock_safe(ticker):
 
 # --- הלוגיקה הראשית ---
 if scan_button:
+    # מנקים את הרשימה מרווחים ופסיקים מיותרים
     tickers = [t.strip() for t in user_tickers.split(',') if t.strip()]
     
     st.info(f"מתחיל סריקה של {len(tickers)} מניות... זה ייקח קצת זמן כדי לא לקרוס.")
@@ -129,6 +132,7 @@ if scan_button:
     progress_bar = st.progress(0)
     status_text = st.empty()
     
+    # לולאה על המניות
     for i, ticker in enumerate(tickers):
         status_text.text(f"בודק: {ticker} ({i+1}/{len(tickers)})")
         data = analyze_stock_safe(ticker)
@@ -149,11 +153,12 @@ if scan_button:
         # חלק תחתון - יוצר הדוחות
         st.divider()
         st.subheader("📝 מחולל דוחות (Telegram Style)")
+        st.caption("בחר מניה מהרשימה כדי לקבל את הדוח המלא והמעוצב שלה:")
         
         col1, col2 = st.columns([1, 2])
         
         with col1:
-            selected_stock = st.radio("בחר מניה לדוח:", df_res['Symbol'].tolist())
+            selected_stock = st.radio("בחר מניה:", df_res['Symbol'].tolist())
             
         with col2:
             if selected_stock:
@@ -194,7 +199,7 @@ if scan_button:
         st.download_button("📥 הורד אקסל מלא", csv, "full_report.csv", "text/csv")
         
     else:
-        st.error("לא הצלחנו למשוך נתונים. נסה שוב או צמצם את הרשימה.")
+        st.error("לא הצלחנו למשוך נתונים. ייתכן ש-Yahoo חוסם את הבקשות כרגע. נסה שוב בעוד כמה דקות או הקטן את הרשימה.")
 
 else:
     st.write("👈 ערוך את רשימת המניות משמאל ולחץ על 'הפעל סריקה'")
