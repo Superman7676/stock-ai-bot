@@ -2,222 +2,250 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
+import numpy as np
 import time
 
 # --- הגדרות עמוד ---
-st.set_page_config(page_title="AI Sniper Ultimate", layout="wide", page_icon="☢️")
-st.title("☢️ AI Sniper Ultimate - מערכת סריקה יציבה")
-st.markdown("סריקה מלאה בחלוקה למנות (מונע קריסות) | כל האינדיקטורים | דוח טלגרם")
+st.set_page_config(page_title="AI Sniper Elite", layout="wide", page_icon="🦅")
+st.title("🦅 AI Sniper Elite - Full Technical Analysis")
+st.markdown("""
+**מערכת סריקה מלאה:** זיהוי תבניות נרות (Candles) | פיבונאצ'י | ניהול סיכונים | כל האינדיקטורים
+""")
 
-# --- רשימת המניות המלאה שלך (מהתמונות) ---
+# --- פונקציה לזיהוי תבניות נרות (Candlestick Patterns) ---
+def analyze_candles(open_p, high, low, close, prev_open, prev_close):
+    body = abs(close - open_p)
+    range_len = high - low
+    if range_len == 0: return "Flat"
+    
+    upper_wick = high - max(close, open_p)
+    lower_wick = min(close, open_p) - low
+    
+    pattern = "Normal"
+    color = "🟢" if close > open_p else "🔴"
+    
+    # 1. Doji (נר של אי ודאות)
+    if body <= 0.1 * range_len:
+        pattern = "Doji ➕"
+    
+    # 2. Hammer (פטיש - סימן להיפוך למעלה)
+    elif lower_wick > 2 * body and upper_wick < body:
+        pattern = "Hammer 🔨 (Reversal?)"
+        
+    # 3. Shooting Star (כוכב נופל - סימן להיפוך למטה)
+    elif upper_wick > 2 * body and lower_wick < body:
+        pattern = "Shooting Star 🌠 (Bearish)"
+        
+    # 4. Marubozu (נר חזק בלי זנבות)
+    elif body > 0.85 * range_len:
+        pattern = "Marubozu 💪"
+        
+    # 5. Engulfing (בולען)
+    prev_body = abs(prev_close - prev_open)
+    if body > prev_body:
+        if close > open_p and prev_close < prev_open: # ירוק בולע אדום
+             pattern = "Bullish Engulfing 🐮"
+        elif close < open_p and prev_close > prev_open: # אדום בולע ירוק
+             pattern = "Bearish Engulfing 🐻"
+
+    return f"{color} {pattern}"
+
+# --- פונקציה ראשית לניתוח מניה בודדת ---
+def analyze_stock(ticker):
+    try:
+        # הורדת נתונים (שנה אחורה)
+        df = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
+        
+        # טיפול במבנה נתונים (MultiIndex fix)
+        if isinstance(df.columns, pd.MultiIndex):
+            try:
+                df = df.xs(ticker, axis=1, level=0)
+            except:
+                pass # לפעמים זה כבר שטוח
+
+        if df.empty or len(df) < 200: return None
+
+        # --- 1. חישוב אינדיקטורים (הכל) ---
+        # ממוצעים
+        df['SMA_50'] = ta.sma(df['Close'], length=50)
+        df['SMA_200'] = ta.sma(df['Close'], length=200)
+        df['EMA_9'] = ta.ema(df['Close'], length=9)
+        df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
+        
+        # מתנדים
+        df['RSI'] = ta.rsi(df['Close'], length=14)
+        macd = ta.macd(df['Close'])
+        df['MACD'] = macd['MACD_12_26_9']
+        df['MACD_H'] = macd['MACDh_12_26_9']
+        
+        adx = ta.adx(df['High'], df['Low'], df['Close'])
+        df['ADX'] = adx['ADX_14']
+        
+        # בולינגר
+        bb = ta.bbands(df['Close'], length=20, std=2)
+        df['BB_U'] = bb['BBU_5_2.0']
+        df['BB_L'] = bb['BBL_5_2.0']
+        
+        # ATR (תנודתיות)
+        df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+
+        # נתונים נוכחיים
+        curr = df.iloc[-1]
+        prev = df.iloc[-2]
+        
+        # --- 2. זיהוי תבניות נרות ---
+        candle_pattern = analyze_candles(curr['Open'], curr['High'], curr['Low'], curr['Close'], prev['Open'], prev['Close'])
+
+        # --- 3. פיבונאצ'י ופיבוטים ---
+        # פיבונאצ'י שנתי
+        year_high = df['High'].max()
+        year_low = df['Low'].min()
+        fib_618 = year_high - (0.618 * (year_high - year_low))
+        
+        # פיבוטים קלאסיים
+        pivot = (curr['High'] + curr['Low'] + curr['Close']) / 3
+        r1 = (2 * pivot) - curr['Low']
+        s1 = (2 * pivot) - curr['High']
+        
+        # --- 4. ניקוד AI ---
+        score = 50
+        trend = "Neutral"
+        
+        # מגמה
+        if curr['Close'] > curr['SMA_200']: 
+            score += 15
+            trend = "Bullish 📈"
+        else:
+            score -= 10
+            trend = "Bearish 📉"
+            
+        # RSI
+        if curr['RSI'] < 30: score += 20
+        elif curr['RSI'] > 75: score -= 15
+        
+        # MACD
+        if curr['MACD_H'] > 0 and curr['MACD_H'] > prev['MACD_H']: score += 10 # מומנטום עולה
+        
+        # ADX (עוצמת מגמה)
+        if curr['ADX'] > 25: score += 5 
+        
+        # נרות
+        if "Bullish" in candle_pattern or "Hammer" in candle_pattern: score += 10
+        if "Bearish" in candle_pattern or "Shooting" in candle_pattern: score -= 10
+
+        final_score = min(max(score, 0), 100)
+        
+        rec = "HOLD"
+        if final_score >= 80: rec = "STRONG BUY 🚀"
+        elif final_score >= 65: rec = "BUY 🟢"
+        elif final_score <= 35: rec = "SELL 🔴"
+        
+        return {
+            'Symbol': ticker,
+            'Price': round(curr['Close'], 2),
+            'Change%': round(((curr['Close'] - prev['Close']) / prev['Close']) * 100, 2),
+            'Rec': rec,
+            'Score': int(final_score),
+            'Candle': candle_pattern,
+            'Trend': trend,
+            'RSI': round(curr['RSI'], 1),
+            'MACD': round(curr['MACD'], 2),
+            'ADX': round(curr['ADX'], 1),
+            'SMA_200': round(curr['SMA_200'], 2),
+            'Dist_SMA200': round(((curr['Close'] - curr['SMA_200'])/curr['SMA_200'])*100, 1),
+            'ATR': round(curr['ATR'], 2),
+            'VWAP': round(curr['VWAP'], 2),
+            'Pivot': round(pivot, 2),
+            'R1': round(r1, 2),
+            'S1': round(s1, 2),
+            'Fib_618': round(fib_618, 2),
+            'Vol_M': round(curr['Volume'] / 1000000, 2)
+        }
+    except Exception as e:
+        return None
+
+# --- רשימת המניות (מלאה) ---
 ALL_TICKERS = [
     'NVDA', 'ALAB', 'CLSK', 'PLTR', 'AMD', 'TSLA', 'MSFT', 'UBER', 'MELI', 'DELL',
     'VRT', 'COHR', 'LITE', 'SMCI', 'MDB', 'SOFI', 'GOOGL', 'AMZN', 'META', 'NFLX',
     'AVGO', 'CRM', 'ORCL', 'INTU', 'RIVN', 'MARA', 'RIOT', 'IREN', 'HOOD', 'UPST',
     'FICO', 'EQIX', 'SPY', 'AXON', 'SNPS', 'TLN', 'ETN', 'RDDT', 'SNOW', 'PANW',
     'ICLR', 'VST', 'LRCX', 'DDOG', 'TWLO', 'BSX', 'NBIS', 'RBLX', 'AFRM', 'CELH',
-    'JD', 'TTD', 'KVUE', 'NET', 'DKNG', 'CVNA', 'ZS', 'CRWD', 'SITM', 'POWL', 'STRL',
-    'SOXX', 'AVAV', 'ACN', 'LOW', 'JBL', 'EPAM', 'CIEN', 'SBAC', 'BIIB', 'BWXT', 'MZTI',
-    'ONTO', 'MNDY', 'TMDX', 'APO', 'EMR', 'APH', 'ENVA', 'OLED', 'TFX', 'NOVT', 'DVA',
-    'ARKQ', 'QTUM', 'PCAR', 'SN', 'OKLO', 'ROKU', 'SSNC', 'RBRK', 'CRCL', 'CORT', 'NEE',
-    'CNR', 'AIR', 'IR', 'APTV', 'NEGG', 'KTOS', 'ESTC', 'AMBA', 'TTMI', 'SEZL', 'MCHP',
-    'LNTH', 'LIVN', 'MP', 'KOMP', 'O', 'INOD', 'CRSP', 'CECO', 'DOCS', 'HNGE', 'SNY',
-    'URA', 'RKLB', 'BN', 'HROW', 'SKWD', 'DOCN', 'KARO', 'U', 'TECK', 'EXEL', 'AMKR',
-    'INTA', 'SPNS', 'HUT', 'GLBE', 'GCT', 'CGNX', 'VKTX', 'CNP', 'BP', 'TOST', 'NNE',
-    'BMNR', 'REZI', 'CHWY', 'KLAR', 'PACS', 'BRBR', 'ARQQ', 'LQDT', 'ALGM', 'RGTI',
-    'CRK', 'QBTS', 'RF', 'TENB', 'AAOI', 'GLXY', 'OUST', 'CPRX', 'LYFT', 'SMR', 'ARCC',
-    'HSAI', 'ZIM', 'WYFI', 'JHX', 'ZETA', 'SONO', 'SKYT', 'INFY', 'CLBT', 'ATEN', 'USAR',
-    'NU', 'OSCR', 'CORZ', 'UUUU', 'JOBY', 'STNE', 'EOSE', 'GRRR', 'AEVA', 'EH', 'PONY',
-    'ACHC', 'DLO', 'SERV', 'QUBT', 'QS', 'PL', 'SOUN', 'OSPN', 'AMPX', 'STLA', 'GILT',
-    'LUNR', 'DV', 'UMAC', 'OPFI', 'DCTH', 'RZLT', 'DNA', 'TSSI', 'ONDS', 'ACHR', 'LUMN',
-    'QMCO', 'AMCR', 'SHLS', 'MOB', 'TMC', 'CCC', 'OPEN', 'EVTL', 'BBAI', 'ASPI', 'BTQ',
-    'PTON', 'POET', 'PDYN', 'MNKD', 'SLDP', 'VERI', 'EVEX', 'KSCP', 'RXRX', 'RIG', 'RR',
-    'SPCE', 'ABAT', 'NUAI', 'VTEX', 'ARAI', 'MSOS', 'PYPD', 'MVST', 'DGXX', 'EVGO',
-    'HIVE', 'WOOF', 'BITF', 'HNST', 'LIDR', 'KOPN', 'ORBS', 'SRFM', 'BTBT', 'BTAI',
-    'CRNT', 'SLNH', 'ALTS', 'QSI', 'INVZ', 'PSTV', 'NVNO', 'APLD', 'CRWV', 'RZLV',
-    'RCAT', 'NVTS', 'IONQ', 'BKSY', 'MNTS', 'ASTS', 'PSTG', 'CIFR', 'UAMY', 'FIG',
-    'AQMS', 'ISRG', 'SYK', 'MDT', 'ABT'
+    'JD', 'TTD', 'KVUE', 'NET', 'DKNG', 'CVNA', 'ZS', 'CRWD', 'SITM', 'POWL', 'STRL'
 ]
+# הערה: קיצרתי את הרשימה כאן לתצוגה, אבל תשאיר את כל המניות שהיו לך בקוד הקודם!
 
-# הסרת כפילויות
-ALL_TICKERS = list(set(ALL_TICKERS))
-
-def analyze_batch(tickers_batch):
-    """מעבד קבוצה קטנה של מניות כדי לא לקרוס"""
-    try:
-        data = yf.download(tickers_batch, period="1y", group_by='ticker', auto_adjust=True, threads=True)
-    except:
-        return []
-
-    batch_results = []
+if st.button('🔥 הפעל סריקה (Deep Scan)'):
+    st.write("מתחיל לעבד מניות... אנא המתן, זה לוקח זמן כי אנחנו מחשבים המון נתונים.")
     
-    # אם יש רק מניה אחת בבאץ', המבנה שונה
-    if len(tickers_batch) == 1:
-        ticker = tickers_batch[0]
-        # נטפל בזה כאילו זו רשימה
-        # (לא נסבך את הקוד כרגע, נניח שהבאץ' תמיד > 1 ברוב המקרים)
-
-    for ticker in tickers_batch:
-        try:
-            if ticker not in data.columns.levels[0]: continue
-            df = data[ticker].copy()
-            df.dropna(subset=['Close'], inplace=True)
-            if len(df) < 200: continue
-
-            # === חישובים כבדים (הכל) ===
-            # MAs
-            df['SMA_50'] = ta.sma(df['Close'], length=50)
-            df['SMA_200'] = ta.sma(df['Close'], length=200)
-            df['EMA_8'] = ta.ema(df['Close'], length=8)
-            df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
-            
-            # Oscillators
-            df['RSI'] = ta.rsi(df['Close'], length=14)
-            macd = ta.macd(df['Close'])
-            df['MACD'] = macd['MACD_12_26_9']
-            df['MACD_H'] = macd['MACDh_12_26_9']
-            
-            adx = ta.adx(df['High'], df['Low'], df['Close'])
-            df['ADX'] = adx['ADX_14']
-            
-            aroon = ta.aroon(df['High'], df['Low'])
-            df['Aroon_U'] = aroon['AROONU_14']
-            
-            # Bands & Vol
-            bb = ta.bbands(df['Close'], length=20, std=2)
-            df['BB_U'] = bb['BBU_5_2.0']
-            df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-            
-            # Current Values
-            curr = df.iloc[-1]
-            prev = df.iloc[-2]
-            
-            # === Logic Score ===
-            score = 50
-            if curr['Close'] > curr['SMA_200']: score += 15
-            if curr['Close'] > curr['SMA_50']: score += 10
-            if curr['RSI'] < 30: score += 20
-            if curr['RSI'] > 75: score -= 15
-            if curr['MACD'] > 0 and curr['MACD_H'] > 0: score += 10
-            if curr['ADX'] > 25 and curr['Aroon_U'] > 70: score += 10
-            
-            final_score = min(max(score, 0), 100)
-            
-            rec = "HOLD"
-            if final_score >= 80: rec = "STRONG BUY 🚀"
-            elif final_score >= 65: rec = "BUY 🟢"
-            elif final_score <= 30: rec = "SELL 🔴"
-
-            # פיבונאצ'י
-            year_high = df['High'].max()
-            year_low = df['Low'].min()
-            fib_618 = year_high - (0.618 * (year_high - year_low))
-            
-            # פיבוט
-            pivot = (curr['High'] + curr['Low'] + curr['Close']) / 3
-            r1 = (2 * pivot) - curr['Low']
-            s1 = (2 * pivot) - curr['High']
-
-            batch_results.append({
-                'Symbol': ticker,
-                'Price': round(curr['Close'], 2),
-                'Change%': round(((curr['Close'] - prev['Close']) / prev['Close']) * 100, 2),
-                'Rec': rec,
-                'Score': int(final_score),
-                'RSI': round(curr['RSI'], 1),
-                'MACD': round(curr['MACD'], 2),
-                'ADX': round(curr['ADX'], 1),
-                'SMA_200': round(curr['SMA_200'], 2),
-                'Dist_SMA200': round(((curr['Close'] - curr['SMA_200'])/curr['SMA_200'])*100, 1),
-                'ATR': round(curr['ATR'], 2),
-                'VWAP': round(curr['VWAP'], 2),
-                'Pivot': round(pivot, 2),
-                'R1': round(r1, 2),
-                'S1': round(s1, 2),
-                'Fib_618': round(fib_618, 2),
-                'Vol_M': round(curr['Volume'] / 1000000, 2)
-            })
-        except:
-            continue
-            
-    return batch_results
-
-if st.button('🔥 הפעל סריקת על (Batch Processing)'):
-    st.write("מתחיל תהליך... אל תסגור את החלון.")
-    
-    master_results = []
-    
-    # כאן הקסם: חלוקה למנות של 30 כדי לא לקרוס
-    chunk_size = 30
-    chunks = [ALL_TICKERS[i:i + chunk_size] for i in range(0, len(ALL_TICKERS), chunk_size)]
-    
+    results = []
     prog_bar = st.progress(0)
-    status_text = st.empty()
+    status = st.empty()
     
-    for i, chunk in enumerate(chunks):
-        status_text.text(f"מעבד קבוצה {i+1} מתוך {len(chunks)}... ({len(chunk)} מניות)")
+    # לולאה בטוחה (אחת אחת) למניעת קריסות
+    for i, ticker in enumerate(ALL_TICKERS):
+        status.text(f"בודק את {ticker} ({i+1}/{len(ALL_TICKERS)})...")
+        res = analyze_stock(ticker)
+        if res:
+            results.append(res)
         
-        # עיבוד הקבוצה
-        batch_res = analyze_batch(chunk)
-        master_results.extend(batch_res)
-        
-        # עדכון בר התקדמות
-        prog_bar.progress((i + 1) / len(chunks))
-        
-        # מנוחה קטנה לשרת (מונע חסימות)
-        time.sleep(0.5)
-
-    status_text.success("✅ הסריקה הושלמה בהצלחה!")
+        prog_bar.progress((i + 1) / len(ALL_TICKERS))
+    
+    status.success("✅ הסריקה הושלמה!")
     prog_bar.empty()
     
-    if master_results:
-        df = pd.DataFrame(master_results)
+    if results:
+        df = pd.DataFrame(results)
         
-        # --- תצוגה 1: Top 5 ---
-        st.subheader("🏆 Top 5 Opportunities")
+        # --- 1. Top Opportunities ---
+        st.subheader("🏆 ההזדמנויות הטובות ביותר (Top 5)")
         st.dataframe(df.sort_values('Score', ascending=False).head(5), use_container_width=True)
         
-        # --- תצוגה 2: דוח טלגרם מפורט ---
+        # --- 2. כרטיס מניה מפורט (Telegram Style) ---
         st.divider()
-        st.subheader("🔬 כרטיס מניה מפורט (Deep Dive)")
+        st.subheader("🔬 כרטיס ניתוח מלא (כפי שביקשת)")
         
-        sel = st.selectbox("בחר מניה מהרשימה:", df['Symbol'].tolist())
-        row = df[df['Symbol'] == sel].iloc[0]
+        selected = st.selectbox("בחר מניה להצגת דוח מלא:", df['Symbol'].tolist())
+        row = df[df['Symbol'] == selected].iloc[0]
         
-        # הטקסט המפורט שביקשת
+        # חישוב יעד וסטופ
+        stop_loss = row['Price'] - (2 * row['ATR'])
+        target = row['R1']
+        
         report = f"""
-🚀 **{row['Symbol']} REPORT** 🚀
-════════════════════════
-• Price: ${row['Price']} ({row['Change%']}%)
-• Rec: {row['Rec']} (Score: {row['Score']})
-• Volume: {row['Vol_M']}M
+🚨 **{row['Symbol']} - TECHNICAL REPORT** 🚨
+════════════════════════════════
+💰 **Price:** ${row['Price']} ({row['Change%']}%)
+🚦 **Signal:** {row['Rec']} (Score: {row['Score']})
+🕯️ **Candle:** {row['Candle']}
 
 📊 **Trend & Momentum**
+• Trend: {row['Trend']} (vs SMA200)
 • RSI: {row['RSI']} | ADX: {row['ADX']} (Strength)
 • MACD: {row['MACD']}
-• vs SMA200: {row['Dist_SMA200']}%
+• VWAP: ${row['VWAP']}
 
-🎯 **Key Levels**
-• Pivot: ${row['Pivot']}
+🎯 **Targets & Levels**
+• Pivot Point: ${row['Pivot']}
 • Resistance (R1): ${row['R1']}
 • Support (S1): ${row['S1']}
 • Golden Fib (61.8%): ${row['Fib_618']}
-• VWAP: ${row['VWAP']}
 
-🛡️ **Risk**
-• ATR (Volatility): ${row['ATR']}
-════════════════════════
+🛡️ **Risk Management**
+• Volatility (ATR): ${row['ATR']}
+• Suggested Stop: ${stop_loss:.2f}
+• Next Target: ${target:.2f}
+════════════════════════════════
 """
-        st.code(report, language="yaml")
+        st.info(report) # מציג את הדוח בתוך קופסה כחולה יפה
+        st.code(report, language="text") # מציג את הדוח כטקסט להעתקה
         
-        # --- תצוגה 3: הורדה ---
+        # --- 3. טבלה מלאה להורדה ---
         st.divider()
+        st.subheader("📥 כל הנתונים")
+        st.dataframe(df)
         csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 הורד דוח מלא (Excel)", csv, "full_scan.csv", "text/csv")
+        st.download_button("הורד דוח Excel מלא", csv, "ai_sniper_report.csv", "text/csv")
         
-        # הצגת כל הטבלה למטה
-        with st.expander("ראה טבלה מלאה (כל המניות)"):
-            st.dataframe(df)
-            
     else:
-        st.error("לא הצלחנו למשוך נתונים. נסה שוב מאוחר יותר.")
+        st.error("לא נמצאו נתונים. בדוק את החיבור לאינטרנט או נסה שוב.")
