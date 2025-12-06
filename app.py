@@ -3,193 +3,186 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+import plotly.graph_objects as go
 import time
 
 # --- הגדרות עמוד ---
-st.set_page_config(page_title="AI Sniper Pro", layout="wide", page_icon="🦅")
+st.set_page_config(page_title="Final AI Sniper", layout="wide", page_icon="🎯")
+st.title("🎯 AI Sniper - גרסה מתוקנת ומלאה")
 
-st.markdown("""
-<style>
-    .report-box {background-color: #111; color: #0f0; padding: 15px; border-radius: 5px; font-family: monospace; border: 1px solid #333;}
-    .metric-card {background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px;}
-</style>
-""", unsafe_allow_html=True)
-
-st.title("🦅 AI Sniper Pro - המערכת המלאה")
-st.caption(f"Yfinance Version: {yf.__version__}") # בדיקה שאנחנו בגרסה החדשה
-
-# --- רשימת מניות (שים כאן את כל הרשימה שלך) ---
+# --- רשימת המניות (הדבק כאן את הרשימה המלאה שלך) ---
 DEFAULT_TICKERS = """NVDA, TSLA, AMD, PLTR, MSFT, GOOGL, AMZN, META,
 ALAB, CLSK, COHR, VRT, LITE, SMCI, MDB, SOFI,
-AVGO, CRM, ORCL, INTU, RIVN, MARA, RIOT, IREN"""
+AVGO, CRM, ORCL, INTU, RIVN, MARA, RIOT, IREN,
+UBER, MELI, DELL, HOOD, UPST, FICO, EQIX, SPY"""
 
-# --- פונקציות זיהוי תבניות (החלק שחסר לך) ---
+# --- פונקציית הקסם לתיקון הנתונים ---
+def fix_yahoo_data(df):
+    # אם הטבלה ריקה
+    if df.empty: return df
+    
+    # הורדת רמה אם יש MultiIndex (הבעיה שגרמה לקריסה)
+    if isinstance(df.columns, pd.MultiIndex):
+        try:
+            # מנסים לשטח את הטבלה
+            df.columns = df.columns.get_level_values(0)
+        except:
+            pass
+            
+    # וידוא שיש עמודת Close
+    # לפעמים זה מגיע כ- 'Close' ולפעמים כ- 'Adj Close'
+    if 'Close' not in df.columns and 'Adj Close' in df.columns:
+        df['Close'] = df['Adj Close']
+        
+    return df
+
+# --- פונקציית זיהוי תבניות ---
 def check_patterns(open_p, high, low, close):
     body = abs(close - open_p)
-    full_range = high - low
-    if full_range == 0: return "None"
+    full = high - low
+    if full == 0: return "Flat"
     
     lower_wick = min(open_p, close) - low
     upper_wick = high - max(open_p, close)
     
     pat = []
-    # Hammer
     if lower_wick > 2 * body and upper_wick < body: pat.append("Hammer 🔨")
-    # Shooting Star
     if upper_wick > 2 * body and lower_wick < body: pat.append("Shooting Star 🌠")
-    # Doji
-    if body < 0.05 * full_range: pat.append("Doji ➕")
-    # Marubozu
-    if body > 0.9 * full_range: pat.append("Marubozu 💪")
+    if body < 0.1 * full: pat.append("Doji ➕")
+    if body > 0.8 * full and close > open_p: pat.append("Big Green 💪")
     
     return ", ".join(pat) if pat else "Normal"
 
-# --- פונקציה שמנסה להוריד בכוח ---
-def get_stock_data(ticker):
+# --- המוח (ניתוח מניה) ---
+def analyze_stock(ticker):
     try:
-        # ניסיון להוריד נתונים
-        df = yf.download(ticker, period="1y", progress=False, auto_adjust=True)
+        # הורדה
+        df = yf.download(ticker, period="6mo", progress=False, auto_adjust=True)
         
-        # וידוא שיש נתונים
-        if df.empty: return None, "Empty Data"
+        # --- התיקון הקריטי ---
+        df = fix_yahoo_data(df)
+        # ---------------------
         
-        # טיפול ב-MultiIndex של יאהו
-        if isinstance(df.columns, pd.MultiIndex):
-            try: df = df.xs(ticker, axis=1, level=0)
-            except: pass
+        if df.empty or 'Close' not in df.columns or len(df) < 50:
+            return None
             
-        # בדיקה נוספת
-        if 'Close' not in df.columns: return None, "No Close Column"
-        
-        return df, "OK"
-    except Exception as e:
-        return None, str(e)
-
-# --- המוח (חישוב אינדיקטורים) ---
-def analyze(ticker, df):
-    try:
-        # 1. אינדיקטורים קלאסיים
+        # חישובים טכניים (בזהירות)
         df['RSI'] = ta.rsi(df['Close'], length=14)
-        df['SMA_50'] = ta.sma(df['Close'], length=50)
         df['SMA_200'] = ta.sma(df['Close'], length=200)
         df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
         
-        # 2. MACD
+        # MACD
         macd = ta.macd(df['Close'])
         df['MACD'] = macd['MACD_12_26_9']
-        df['MACD_Signal'] = macd['MACDs_12_26_9']
         
-        # 3. בולינגר
-        bb = ta.bbands(df['Close'], length=20, std=2)
-        df['BB_U'] = bb['BBU_5_2.0']
-        df['BB_L'] = bb['BBL_5_2.0']
-        
-        # 4. זיהוי נרות (על הנר האחרון)
+        # נתונים אחרונים
         curr = df.iloc[-1]
-        candle_type = check_patterns(curr['Open'], curr['High'], curr['Low'], curr['Close'])
         
-        # 5. פיבונאצ'י
+        # זיהוי תבנית
+        pattern = check_patterns(curr['Open'], curr['High'], curr['Low'], curr['Close'])
+        
+        # פיבונאצ'י
         high_y = df['High'].max()
         low_y = df['Low'].min()
         fib_618 = high_y - 0.618 * (high_y - low_y)
         
-        # 6. ציון וסיגנל
+        # פיבוט
+        pivot = (curr['High'] + curr['Low'] + curr['Close']) / 3
+        r1 = (2 * pivot) - curr['Low']
+        
+        # ציון
         score = 50
-        if curr['Close'] > curr['SMA_200']: score += 20
+        if curr['Close'] > (curr['SMA_200'] if not pd.isna(curr['SMA_200']) else 0): score += 20
         if curr['RSI'] < 30: score += 20
         if curr['RSI'] > 75: score -= 15
-        if curr['MACD'] > curr['MACD_Signal']: score += 10
-        if "Hammer" in candle_type: score += 15
+        if "Hammer" in pattern: score += 15
         
-        score = min(max(score, 0), 100)
         rec = "HOLD"
         if score >= 80: rec = "STRONG BUY 🚀"
         elif score >= 60: rec = "BUY 🟢"
         elif score <= 30: rec = "SELL 🔴"
         
-        # חישוב פיבוט
-        pivot = (curr['High'] + curr['Low'] + curr['Close']) / 3
-        
         return {
             'Symbol': ticker,
             'Price': curr['Close'],
-            'Rec': rec,
             'Score': score,
+            'Rec': rec,
             'RSI': curr['RSI'],
-            'Candle': candle_type,
+            'Pattern': pattern,
             'Fib_618': fib_618,
             'Pivot': pivot,
-            'SMA_200': curr['SMA_200'],
+            'R1': r1,
             'ATR': curr['ATR']
         }
+        
     except Exception as e:
         return None
 
-# --- UI ראשי ---
-input_tickers = st.text_area("הכנס רשימת מניות (מופרד בפסיקים)", DEFAULT_TICKERS, height=100)
+# --- ממשק משתמש ---
+user_input = st.text_area("הכנס רשימת מניות:", DEFAULT_TICKERS, height=100)
 
-if st.button("🔥 הפעל סריקה מלאה"):
-    tickers_list = [t.strip().upper() for t in input_tickers.split(',') if t.strip()]
+if st.button("🔥 הפעל סריקה"):
+    tickers = [t.strip().upper() for t in user_input.split(',') if t.strip()]
+    
+    st.info(f"סורק {len(tickers)} מניות... (עובר אחת אחת למניעת תקלות)")
     
     results = []
-    errors = []
+    bar = st.progress(0)
     
-    progress = st.progress(0)
-    status = st.empty()
-    
-    for i, t in enumerate(tickers_list):
-        status.text(f"בודק את {t}...")
-        df, msg = get_stock_data(t)
-        
-        if df is not None:
-            res = analyze(t, df)
-            if res: results.append(res)
+    for i, t in enumerate(tickers):
+        data = analyze_stock(t)
+        if data:
+            results.append(data)
         else:
-            errors.append(f"{t}: {msg}")
+            # אם נכשל, ננסה שוב עם השהייה קטנה
+            time.sleep(0.5)
+            data_retry = analyze_stock(t)
+            if data_retry: results.append(data_retry)
             
-        progress.progress((i+1)/len(tickers_list))
+        bar.progress((i+1)/len(tickers))
+        
+    bar.empty()
     
-    status.empty()
-    progress.empty()
-    
-    # הצגת תוצאות
     if results:
         df_res = pd.DataFrame(results)
         
-        st.subheader("🏆 תוצאות הסריקה")
-        st.dataframe(df_res.sort_values("Score", ascending=False), use_container_width=True)
+        # טבלה ראשית
+        st.success(f"נמצאו נתונים ל-{len(df_res)} מניות!")
+        st.dataframe(
+            df_res.sort_values('Score', ascending=False).style.format({"Price": "{:.2f}", "RSI": "{:.1f}"}),
+            use_container_width=True
+        )
         
         st.divider()
-        st.subheader("🔬 דוח מפורט (לחץ להעתקה)")
         
-        selected = st.selectbox("בחר מניה לדוח:", df_res['Symbol'].tolist())
-        row = df_res[df_res['Symbol'] == selected].iloc[0]
-        
-        # יצירת הדוח הטקסטואלי
-        report = f"""
-🚨 **{row['Symbol']} REPORT** 🚨
+        # מחולל דוחות
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.subheader("📝 בחר מניה לדוח")
+            selected = st.radio("רשימה:", df_res['Symbol'].tolist(), label_visibility="collapsed")
+            
+        with col2:
+            row = df_res[df_res['Symbol'] == selected].iloc[0]
+            stop_loss = row['Price'] - 2 * row['ATR']
+            
+            report = f"""
+🚨 **{row['Symbol']} SIGNAL REPORT** 🚨
 ══════════════════════
 💰 Price: ${row['Price']:.2f}
 🚦 Signal: {row['Rec']} (Score: {row['Score']})
-🕯️ Pattern: {row['Candle']}
+🕯️ Pattern: {row['Pattern']}
 
-📊 **Technical Data**
+📊 **Technical Stats**
 • RSI: {row['RSI']:.1f}
-• Trend (SMA200): {'Bullish 🟢' if row['Price'] > row['SMA_200'] else 'Bearish 🔴'}
-• Volatility (ATR): {row['ATR']:.2f}
+• Pivot Point: ${row['Pivot']:.2f}
+• Resistance (R1): ${row['R1']:.2f}
 
 🎯 **Key Levels**
-• Pivot: ${row['Pivot']:.2f}
 • Golden Fib (61.8%): ${row['Fib_618']:.2f}
-
-🛡️ **Trade Setup**
-• Stop Loss: ${row['Price'] - 2*row['ATR']:.2f}
-• Target: ${row['Pivot'] + 2*row['ATR']:.2f}
+• Stop Loss: ${stop_loss:.2f}
 ══════════════════════
 """
-        st.markdown(f'<div class="report-box">{report}</div>', unsafe_allow_html=True)
-        
-    # הצגת שגיאות אם יש (כדי שנבין למה דברים לא עובדים)
-    if errors:
-        with st.expander("ראה שגיאות טכניות (DEBUG)"):
-            st.write(errors)
+            st.code(report, language="text")
+            
+    else:
+        st.error("עדיין לא נמצאו נתונים. הבעיה כנראה חסימה חמורה של ה-IP בשרת.")
