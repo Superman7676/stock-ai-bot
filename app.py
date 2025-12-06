@@ -3,7 +3,6 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
-import time
 
 # --- הגדרות עמוד ---
 st.set_page_config(page_title="AI Sniper Elite", layout="wide", page_icon="🦅")
@@ -61,7 +60,7 @@ def analyze_stock(ticker):
             try:
                 df = df.xs(ticker, axis=1, level=0)
             except:
-                pass # לפעמים זה כבר שטוח
+                pass 
 
         if df.empty or len(df) < 200: return None
 
@@ -173,7 +172,7 @@ ALL_TICKERS = [
     'ICLR', 'VST', 'LRCX', 'DDOG', 'TWLO', 'BSX', 'NBIS', 'RBLX', 'AFRM', 'CELH',
     'JD', 'TTD', 'KVUE', 'NET', 'DKNG', 'CVNA', 'ZS', 'CRWD', 'SITM', 'POWL', 'STRL'
 ]
-# הערה: קיצרתי את הרשימה כאן לתצוגה, אבל תשאיר את כל המניות שהיו לך בקוד הקודם!
+# הערה: לשימוש אמיתי תוסיף כאן את שאר הרשימה שלך, כרגע שמתי ~60 כדי שזה ירוץ מהר להדגמה
 
 if st.button('🔥 הפעל סריקה (Deep Scan)'):
     st.write("מתחיל לעבד מניות... אנא המתן, זה לוקח זמן כי אנחנו מחשבים המון נתונים.")
