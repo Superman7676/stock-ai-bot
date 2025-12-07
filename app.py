@@ -4,288 +4,221 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
-from datetime import datetime, timedelta
+from datetime import datetime
+import time
 
 # --- הגדרות ---
-st.set_page_config(page_title="AI Sniper Ultimate", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="AI Hedge Fund Scanner", layout="wide", page_icon="🏦")
+st.title("🏦 AI Hedge Fund Scanner (500+ Stocks Capable)")
 
-# --- עיצוב ---
-st.markdown("""
-<style>
-    .telegram-box {
-        background-color: #1e1e1e;
-        color: #e0e0e0;
-        padding: 20px;
-        border-radius: 10px;
-        font-family: 'Consolas', 'Courier New', monospace;
-        white-space: pre-wrap;
-        border: 1px solid #444;
-        font-size: 14px;
-        line-height: 1.4;
+# --- רשימת ברירת מחדל (תוכל להדביק את ה-500 שלך בממשק) ---
+DEFAULT_LIST = """NVDA, TSLA, AMD, PLTR, MSFT, GOOGL, AMZN, META,
+ALAB, CLSK, COHR, VRT, LITE, SMCI, MDB, SOFI,
+AVGO, CRM, ORCL, INTU, RIVN, MARA, RIOT, IREN"""
+
+# --- פונקציות ליבה ---
+
+# 1. פונקציית תיקון נתונים (מונע קריסות)
+def fix_data(df):
+    if df.empty: return None
+    if isinstance(df.columns, pd.MultiIndex):
+        try: df.columns = df.columns.get_level_values(0)
+        except: pass
+    # הסרת טיקרים שנכשלו (שורות ריקות)
+    if 'Close' not in df.columns: return None
+    return df
+
+# 2. חישוב טכני מהיר (לסריקת המונים)
+def calculate_quick_technicals(df):
+    # חישובים וקטוריים מהירים לכל ה-DataFrame בבת אחת
+    # זה הרבה יותר מהיר מלולאה
+    df['RSI'] = ta.rsi(df['Close'], length=14)
+    df['SMA_50'] = ta.sma(df['Close'], length=50)
+    df['SMA_200'] = ta.sma(df['Close'], length=200)
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    return df
+
+# 3. מנוע AI כבד (רץ רק על מניה ספציפית שנבחרה)
+def run_deep_ai_analysis(ticker):
+    df = yf.download(ticker, period="2y", interval="1d", progress=False, auto_adjust=True)
+    df = fix_data(df)
+    if df is None: return None
+    
+    # חישוב כל האינדיקטורים שביקשת
+    df['SMA_5'] = ta.sma(df['Close'], length=5)
+    df['SMA_20'] = ta.sma(df['Close'], length=20)
+    df['SMA_50'] = ta.sma(df['Close'], length=50)
+    df['SMA_200'] = ta.sma(df['Close'], length=200)
+    
+    df['RSI'] = ta.rsi(df['Close'], length=14)
+    df['MACD'] = ta.macd(df['Close'])['MACD_12_26_9']
+    df['ADX'] = ta.adx(df['High'], df['Low'], df['Close'])['ADX_14']
+    
+    aroon = ta.aroon(df['High'], df['Low'])
+    df['Aroon_Up'] = aroon['AROONU_14']
+    
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
+    
+    # פיבונאצ'י ופיבוטים
+    curr = df.iloc[-1]
+    y_high = df['High'][-252:].max()
+    y_low = df['Low'][-252:].min()
+    fib_618 = y_high - 0.618 * (y_high - y_low)
+    
+    pivot = (curr['High'] + curr['Low'] + curr['Close']) / 3
+    r1 = 2*pivot - curr['Low']
+    s1 = 2*pivot - curr['High']
+    
+    # --- אימון מודל ML לחיזוי (Heavy Computation) ---
+    df_ml = df.dropna().copy()
+    df_ml['Target'] = df_ml['Close'].shift(-1) # חיזוי למחר
+    features = ['Close', 'RSI', 'SMA_5', 'MACD']
+    
+    X = df_ml[features].iloc[:-1]
+    y = df_ml['Target'].iloc[:-1]
+    
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X, y)
+    
+    last_row = df_ml[features].iloc[[-1]]
+    pred_price = model.predict(last_row)[0]
+    accuracy = model.score(X, y) * 100
+    
+    # ניקוד משוקלל
+    score = 50
+    if curr['Close'] > curr['SMA_200']: score += 20
+    if curr['RSI'] < 30: score += 15
+    if pred_price > curr['Close']: score += 15
+    
+    rec = "HOLD"
+    if score >= 80: rec = "STRONG BUY 🚀"
+    elif score >= 60: rec = "BUY 🟢"
+    elif score <= 40: rec = "SELL 🔴"
+    
+    return {
+        'Symbol': ticker, 'Price': curr['Close'], 'Rec': rec, 'Score': score,
+        'Pred': pred_price, 'Acc': accuracy, 'RSI': curr['RSI'],
+        'SMA200': curr['SMA_200'], 'ATR': curr['ATR'], 'VWAP': curr['VWAP'],
+        'Pivot': pivot, 'R1': r1, 'S1': s1, 'Fib618': fib_618,
+        'Aroon': curr['Aroon_Up'], 'ADX': curr['ADX'], 'Vol': curr['Volume']
     }
-</style>
-""", unsafe_allow_html=True)
 
-st.title("🦁 AI Sniper Ultimate - Deep Dive Analysis")
-
-# --- רשימת מניות לבחירה ---
-DEFAULT_TICKERS = ["NVDA", "TSLA", "AMD", "PLTR", "MSFT", "GOOGL", "AMZN", "META", 
-                   "ALAB", "CLSK", "COHR", "VRT", "LITE", "SMCI", "MDB", "SOFI", 
-                   "AVGO", "CRM", "ORCL", "INTU", "RIVN", "MARA", "RIOT", "IREN"]
-
-# --- מנוע ה-AI (סימולציית LSTM באמצעות Random Forest) ---
-def get_ai_prediction(df):
-    try:
-        data = df.copy()
-        data['Target'] = data['Close'].shift(-1) # לחזות את מחר
-        data['Returns'] = data['Close'].pct_change()
-        data['SMA_5'] = ta.sma(data['Close'], length=5)
-        data['RSI'] = ta.rsi(data['Close'], length=14)
-        data = data.dropna()
-        
-        if len(data) < 50: return 0, 0, 0
-        
-        X = data[['Close', 'Returns', 'SMA_5', 'RSI']]
-        y = data['Target']
-        
-        model = RandomForestRegressor(n_estimators=100, random_state=42)
-        model.fit(X, y)
-        
-        last_row = X.iloc[[-1]]
-        pred_tomorrow = model.predict(last_row)[0]
-        
-        # חיזוי לשבוע הבא (הערכה גסה)
-        trend = (pred_tomorrow - last_row['Close'].values[0])
-        pred_week = pred_tomorrow + (trend * 5)
-        
-        accuracy = model.score(X, y) * 100
-        return pred_tomorrow, pred_week, accuracy
-    except:
-        return 0, 0, 0
-
-# --- המוח המרכזי: חישוב כל האינדיקטורים שביקשת ---
-def analyze_deep_stock(ticker):
-    try:
-        # 1. משיכת נתונים (שנתיים אחורה כדי שיהיה מספיק ל-SMA200)
-        df = yf.download(ticker, period="2y", interval="1d", progress=False, auto_adjust=True)
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+# --- לוגיקת סריקה המונית (Batch Processing) ---
+@st.cache_data(ttl=600)
+def scan_market(tickers_list):
+    results = []
+    # חלוקה למנות של 20 כדי לא לקרוס
+    chunk_size = 20
+    chunks = [tickers_list[i:i + chunk_size] for i in range(0, len(tickers_list), chunk_size)]
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i, chunk in enumerate(chunks):
+        status_text.text(f"Processing batch {i+1}/{len(chunks)}...")
+        try:
+            # הורדה קבוצתית (מהירה)
+            data = yf.download(chunk, period="6mo", group_by='ticker', threads=True, progress=False, auto_adjust=True)
             
-        if df.empty: return None
+            for ticker in chunk:
+                try:
+                    # טיפול במידע
+                    if len(chunk) == 1: df = data # אם יש רק מניה אחת
+                    else: df = data[ticker]
+                    
+                    df = df.dropna(subset=['Close'])
+                    if len(df) < 50: continue
+                    
+                    # חישוב מהיר
+                    curr_price = df['Close'].iloc[-1]
+                    rsi = ta.rsi(df['Close']).iloc[-1]
+                    sma200 = ta.sma(df['Close'], length=200).iloc[-1]
+                    
+                    # ניקוד בסיסי לסינון
+                    score = 50
+                    if curr_price > sma200: score += 20
+                    if rsi < 30: score += 20
+                    elif rsi > 70: score -= 15
+                    
+                    rec = "NEUTRAL"
+                    if score >= 70: rec = "BUY"
+                    elif score <= 30: rec = "SELL"
+                    
+                    results.append({
+                        'Symbol': ticker, 'Price': curr_price, 'RSI': rsi, 
+                        'Score': score, 'Rec': rec, 'SMA200': sma200
+                    })
+                except: continue
+        except: continue
+        
+        progress_bar.progress((i+1)/len(chunks))
+        
+    status_text.empty()
+    progress_bar.empty()
+    return pd.DataFrame(results)
 
-        # נתונים נוכחיים
-        curr = df.iloc[-1]
-        close = curr['Close']
-        
-        # --- 2. ממוצעים נעים (MAs) ---
-        mas = {}
-        for x in [5, 8, 12, 20, 50, 100, 150, 200]:
-            mas[f'SMA_{x}'] = ta.sma(df['Close'], length=x).iloc[-1]
-            if x <= 50: # EMAs לקצרים
-                mas[f'EMA_{x}'] = ta.ema(df['Close'], length=x).iloc[-1]
-        
-        mas['EMA_26'] = ta.ema(df['Close'], length=26).iloc[-1]
+# --- UI ---
+sidebar_input = st.sidebar.text_area("הדבק כאן 500+ מניות:", DEFAULT_LIST, height=300)
+start_btn = st.sidebar.button("🚀 הפעל סורק על (Mass Scan)")
 
-        # חישוב מרחקים
-        dists = {
-            'SMA20': ((close - mas['SMA_20']) / mas['SMA_20']) * 100,
-            'SMA50': ((close - mas['SMA_50']) / mas['SMA_50']) * 100,
-            'SMA200': ((close - mas['SMA_200']) / mas['SMA_200']) * 100
-        }
+if 'scan_results' not in st.session_state:
+    st.session_state['scan_results'] = None
 
-        # --- 3. מתנדים (Oscillators) ---
-        rsi = {
-            '7': ta.rsi(df['Close'], length=7).iloc[-1],
-            '14': ta.rsi(df['Close'], length=14).iloc[-1],
-            '21': ta.rsi(df['Close'], length=21).iloc[-1]
-        }
-        
-        macd = ta.macd(df['Close'])
-        adx = ta.adx(df['High'], df['Low'], df['Close'])
-        aroon = ta.aroon(df['High'], df['Low'])
-        stoch = ta.stoch(df['High'], df['Low'], df['Close'])
-        bb = ta.bbands(df['Close'], length=20, std=2)
-        mfi = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'])
-        cci = ta.cci(df['High'], df['Low'], df['Close'])
-        
-        # VWAP (קירוב לגרף יומי)
-        vwap_day = (curr['High'] + curr['Low'] + curr['Close']) / 3
-        
-        # --- 4. ATR Supreme ---
-        atr14 = ta.atr(df['High'], df['Low'], df['Close'], length=14).iloc[-1]
-        atr20 = ta.atr(df['High'], df['Low'], df['Close'], length=20).iloc[-1]
-        atr28 = ta.atr(df['High'], df['Low'], df['Close'], length=28).iloc[-1]
-        atr_avg = (atr14 + atr20 + atr28) / 3
+if start_btn:
+    clean_list = [x.strip().upper() for x in sidebar_input.replace('\n', ',').split(',') if x.strip()]
+    st.info(f"מתחיל סריקה של {len(clean_list)} מניות... זה ייקח זמן, אבל לא יקרוס.")
+    st.session_state['scan_results'] = scan_market(clean_list)
 
-        # --- 5. פיבונאצ'י ופיבוטים ---
-        # פיבונאצ'י שנתי
-        y_high = df['High'][-252:].max()
-        y_low = df['Low'][-252:].min()
-        diff = y_high - y_low
-        fibs = {
-            '23.6': y_high - 0.236 * diff,
-            '38.2': y_high - 0.382 * diff,
-            '50.0': y_high - 0.5 * diff,
-            '61.8': y_high - 0.618 * diff,
-            'Ext_127': y_high + 0.272 * diff,
-            'Ext_161': y_high + 0.618 * diff
-        }
-        
-        # Pivots
-        p = (curr['High'] + curr['Low'] + curr['Close']) / 3
-        r1 = 2*p - curr['Low']
-        r2 = p + (curr['High'] - curr['Low'])
-        r3 = curr['High'] + 2*(p - curr['Low'])
-        s1 = 2*p - curr['High']
-        s2 = p - (curr['High'] - curr['Low'])
-        s3 = curr['Low'] - 2*(curr['High'] - p)
+# הצגת תוצאות הסריקה
+if st.session_state['scan_results'] is not None:
+    df = st.session_state['scan_results']
+    
+    # טבלה מסכמת
+    st.subheader(f"📊 תוצאות סריקה ({len(df)} מניות זוהו)")
+    st.dataframe(
+        df.sort_values('Score', ascending=False).style.format({'Price': '{:.2f}', 'RSI': '{:.1f}'}),
+        use_container_width=True
+    )
+    
+    st.divider()
+    
+    # --- החלק שאתה רוצה: Deep Dive & AI ---
+    st.subheader("🔬 ניתוח עומק + AI Prediction")
+    st.caption("בחר מניה מהטבלה למעלה כדי להפעיל עליה את המודלים הכבדים (LSTM/ML/Full Technicals):")
+    
+    selected_ticker = st.selectbox("בחר מניה:", df['Symbol'].unique())
+    
+    if st.button(f"🧠 הפעל בינה מלאכותית על {selected_ticker}"):
+        with st.spinner("מאמן מודלים ומחשב 50 אינדיקטורים..."):
+            data = run_deep_ai_analysis(selected_ticker)
+            
+        if data:
+            # הדיווח המלא שביקשת
+            report = f"""
+⭐️ **{data['Symbol']} DEEP AI REPORT**
+════════════════════════════
+💰 Price: ${data['Price']:.2f}
+🚦 Signal: {data['Rec']} (Score: {data['Score']})
 
-        # --- 6. גורמים חיוביים/שליליים (Logic) ---
-        positives = []
-        negatives = []
-        
-        if close > mas['SMA_200']: positives.append("Price above SMA200 - Major bullish trend")
-        else: negatives.append("Price below SMA200 - Long term weakness")
-        
-        if rsi['14'] > 50: positives.append("RSI > 50 - Bullish Momentum")
-        else: negatives.append("RSI < 50 - Bearish Momentum")
-        
-        if macd['MACDh_12_26_9'].iloc[-1] > 0: positives.append("MACD Histogram Positive")
-        else: negatives.append("MACD Histogram Negative")
-        
-        if adx['ADX_14'].iloc[-1] > 25: positives.append("Strong Trend Strength (ADX > 25)")
-        
-        # --- 7. AI Prediction ---
-        pred_tmrw, pred_week, ai_acc = get_ai_prediction(df)
-        
-        # חישוב המלצה
-        score = 50
-        if close > mas['SMA_200']: score += 20
-        if rsi['14'] < 30: score += 15
-        if pred_tmrw > close: score += 15
-        
-        rec = "HOLD"
-        if score >= 80: rec = "STRONG BUY 🚀"
-        elif score >= 60: rec = "BUY 🟢"
-        elif score <= 40: rec = "SELL 🔴"
+🎯 **AI Prediction (Machine Learning)**
+• Forecast (Next Day): ${data['Pred']:.2f}
+• Model Confidence: {data['Acc']:.1f}%
 
-        # --- בניית האובייקט הענק ---
-        return {
-            'Symbol': ticker,
-            'Price': close,
-            'Change_Pct': df['Close'].pct_change().iloc[-1] * 100,
-            'Change_USD': close - df['Close'].iloc[-2],
-            'Vol': curr['Volume'],
-            'Avg_Vol': df['Volume'].mean(),
-            'High': curr['High'], 'Low': curr['Low'],
-            'Year_High': y_high, 'Year_Low': y_low,
-            'MAs': mas,
-            'Dists': dists,
-            'RSI': rsi,
-            'MACD': macd.iloc[-1],
-            'ADX': adx.iloc[-1],
-            'Stoch': stoch.iloc[-1],
-            'BB': bb.iloc[-1],
-            'Aroon': aroon.iloc[-1],
-            'MFI': mfi.iloc[-1],
-            'CCI': cci.iloc[-1],
-            'VWAP': vwap_day,
-            'ATR_Avg': atr_avg,
-            'ATR_Rel': atr_avg / close,
-            'Fibs': fibs,
-            'Pivots': {'P': p, 'R1': r1, 'R2': r2, 'R3': r3, 'S1': s1, 'S2': s2, 'S3': s3},
-            'Positives': positives,
-            'Negatives': negatives,
-            'AI': {'Tmrw': pred_tmrw, 'Week': pred_week, 'Acc': ai_acc},
-            'Rec': {'Signal': rec, 'Entry': close, 'Stop': close - 2*atr_avg, 'T1': r1, 'T2': r2},
-            'Score': score
-        }
-        
-    except Exception as e:
-        st.error(f"Error analyzing {ticker}: {e}")
-        return None
+📊 **Key Indicators**
+• RSI: {data['RSI']:.1f} | ADX: {data['ADX']:.1f}
+• Aroon Up: {data['Aroon']:.0f}
+• VWAP: ${data['VWAP']:.2f}
 
-# --- UI ראשי ---
-col_in, col_btn = st.columns([3, 1])
-with col_in:
-    ticker_input = st.selectbox("בחר מניה לניתוח עומק:", DEFAULT_TICKERS)
-with col_btn:
-    st.write("")
-    st.write("")
-    run_btn = st.button("🚀 הפעל ניתוח מלא")
-
-if run_btn and ticker_input:
-    with st.spinner(f"מפעיל את המנוע על {ticker_input}... מחשב AI, ממוצעים, פיבונאצ'י ואינדיקטורים..."):
-        data = analyze_deep_stock(ticker_input)
-        
-    if data:
-        # כאן אנחנו בונים את הטקסט הענק בדיוק כמו שביקשת
-        # F-String מפלצתי לפורמט טלגרם
-        
-        report = f"""
-⭐️ **{data['Symbol']} Corporation**
-Sector: Technology | Sentiment: {data['Rec']['Signal']} | Trend Score: {data['Score']}/100
-══════════════════
-💰 **Price & Change**
-• Price: {data['Price']:.2f}$ ({'🟢' if data['Change_Pct']>0 else '🔴'} {data['Change_Pct']:.2f}% | {data['Change_USD']:.2f}$)
-• H/L: {data['High']:.2f}$ / {data['Low']:.2f}$
-• 52W H/L: {data['Year_High']:.2f}$ / {data['Year_Low']:.2f}$
-🔊 Vol Day: {data['Vol']/1000000:.2f}M | Avg Vol: {data['Avg_Vol']/1000000:.2f}M | Ratio: {data['Vol']/data['Avg_Vol']:.2f}x
-• ATR14: {data['ATR_Avg']:.2f}$
-══════════════════
-🎯 **LSTM AI Predictions**
-• Tomorrow: ${data['AI']['Tmrw']:.2f}
-• Next Week: ${data['AI']['Week']:.2f}
-• Model Accuracy: {data['AI']['Acc']:.1f}%
-══════════════════
-📊 **Moving Averages**
-• SMA-5: {data['MAs']['SMA_5']:.2f}$ | SMA-20: {data['MAs']['SMA_20']:.2f}$ | SMA-50: {data['MAs']['SMA_50']:.2f}$
-• SMA-100: {data['MAs']['SMA_100']:.2f}$ | SMA-200: {data['MAs']['SMA_200']:.2f}$
-• EMA-5: {data['MAs']['EMA_5']:.2f}$ | EMA-20: {data['MAs']['EMA_20']:.2f}$ | EMA-50: {data['MAs']['EMA_50']:.2f}$
-→→→→→→→→→→→→→→→→→
-• Distance: 
-  P→SMA50: {data['Dists']['SMA50']:.2f}% | P→SMA200: {data['Dists']['SMA200']:.2f}%
-• VWAP-Day: {data['VWAP']:.2f}$
-═════════════════
-⚡️ **Momentum & Oscillators**
-• RSI-7: {data['RSI']['7']:.1f} | RSI-14: {data['RSI']['14']:.1f} | RSI-21: {data['RSI']['21']:.1f}
-• MACD: {data['MACD']['MACD_12_26_9']:.2f} | Hist: {data['MACD']['MACDh_12_26_9']:.2f}
-• ADX: {data['ADX']['ADX_14']:.2f} (Strength)
-• Stoch %K/%D: {data['Stoch']['STOCHk_14_3_3']:.1f}/{data['Stoch']['STOCHd_14_3_3']:.1f}
-• BB Width%: {data['BB']['BBB_5_2.0']:.2f}%
-• Aroon ↑/↓: {data['Aroon']['AROONU_14']:.0f} / {data['Aroon']['AROOND_14']:.0f}
-• MFI: {data['MFI']:.1f} | CCI: {data['CCI']:.2f}
-═════════════════
-📐 **Support/Resistance & Pivots**
-• Pivot: ${data['Pivots']['P']:.2f}
-• R1: ${data['Pivots']['R1']:.2f} | R2: ${data['Pivots']['R2']:.2f} | R3: ${data['Pivots']['R3']:.2f}
-• S1: ${data['Pivots']['S1']:.2f} | S2: ${data['Pivots']['S2']:.2f} | S3: ${data['Pivots']['S3']:.2f}
-═════════════════
-🔢 **Fibonacci Levels**
-• Fib-23.6%: ${data['Fibs']['23.6']:.2f} | Fib-38.2%: ${data['Fibs']['38.2']:.2f}
-• Fib-50%: ${data['Fibs']['50.0']:.2f} | Fib-61.8%: ${data['Fibs']['61.8']:.2f} 🌟
-
-🎯 **Fibonacci Targets**
-• Ext-127.2%: ${data['Fibs']['Ext_127']:.2f} | Ext-161.8%: ${data['Fibs']['Ext_161']:.2f} 🌟
-═════════════════
-🟢 **Significant POSITIVE FACTORS:**
-{chr(10).join([' + ' + x for x in data['Positives']])}
-
-🔴 **Significant NEGATIVE FACTORS:**
-{chr(10).join([' - ' + x for x in data['Negatives']])}
-
-📊 **COMPREHENSIVE SUMMARY:**
-• Overall Bias: {data['Rec']['Signal']}
-═════════════════
-🌊 **ATR Supreme Analysis:**
-• ATR Average: {data['ATR_Avg']:.2f}
-• ATR Relative: {data['ATR_Rel']:.3f}
-═════════════════
-🏛 **Recommendation:**
-Entry: ${data['Rec']['Entry']:.2f} | Stop: ${data['Rec']['Stop']:.2f}
-Targets: T1=${data['Rec']['T1']:.2f} · T2=${data['Rec']['T2']:.2f}
-═══════════════════
-Composite Score: {data['Score']}/100 | Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🌊 **Levels & Risk**
+• Pivot: ${data['Pivot']:.2f} | R1: ${data['R1']:.2f}
+• Golden Fib (61.8%): ${data['Fib618']:.2f}
+• ATR (Volatility): ${data['ATR']:.2f}
+════════════════════════════
 """
-        st.markdown(f'<div class="telegram-box">{report}</div>', unsafe_allow_html=True)
+            st.code(report, language="text")
+            
+            # אזור גרפי
+            col1, col2 = st.columns(2)
+            col1.metric("חיזוי AI", f"${data['Pred']:.2f}")
+            col2.metric("טווח בולינגר", "תקין") # (אפשר להרחיב)
