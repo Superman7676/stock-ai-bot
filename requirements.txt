@@ -1,6 +1,7 @@
-Astreamlit
+streamlit
 yfinance>=0.2.54
 pandas
 pandas_ta
 numpy
 scikit-learn
+plotly
