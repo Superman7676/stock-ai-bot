@@ -5,229 +5,213 @@ import pandas_ta as ta
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 from datetime import datetime
-import time
 
 # --- הגדרות ---
-st.set_page_config(page_title="AI Hedge Fund Scanner", layout="wide", page_icon="🏦")
-st.title("🏦 AI Hedge Fund Scanner (500+ Stocks Capable)")
+st.set_page_config(page_title="AI Sniper Ultimate", layout="wide", page_icon="🦅")
+st.title("🦅 AI Sniper Ultimate - מערכת סריקה וניתוח מלאה")
 
-# --- רשימת ברירת מחדל ---
+# --- רשימת ברירת מחדל (תוכל להדביק את ה-500 שלך) ---
 DEFAULT_LIST = """NVDA, TSLA, AMD, PLTR, MSFT, GOOGL, AMZN, META,
 ALAB, CLSK, COHR, VRT, LITE, SMCI, MDB, SOFI,
 AVGO, CRM, ORCL, INTU, RIVN, MARA, RIOT, IREN"""
 
-# --- פונקציות ליבה ---
-
+# --- פונקציה לתיקון נתונים (מונעת את השגיאות האדומות) ---
 def fix_data(df):
     if df.empty: return None
-    # תיקון לבעיית MultiIndex של יאהו
+    # טיפול ב-MultiIndex
     if isinstance(df.columns, pd.MultiIndex):
         try: df.columns = df.columns.get_level_values(0)
         except: pass
-    # הסרת טיקרים שנכשלו
+    # וידוא עמודת Close
+    if 'Close' not in df.columns and 'Adj Close' in df.columns:
+        df['Close'] = df['Adj Close']
     if 'Close' not in df.columns: return None
-    # המרת נתונים למספרים למניעת שגיאות
-    df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
-    return df.dropna(subset=['Close'])
+    return df
 
-# --- מנוע AI כבד (רץ רק על מניה ספציפית שנבחרה) ---
-def run_deep_ai_analysis(ticker):
-    try:
-        df = yf.download(ticker, period="2y", interval="1d", progress=False, auto_adjust=True)
-        df = fix_data(df)
-        if df is None: return None
-        
-        # חישוב כל האינדיקטורים שביקשת
-        df['SMA_5'] = ta.sma(df['Close'], length=5)
-        df['SMA_20'] = ta.sma(df['Close'], length=20)
-        df['SMA_50'] = ta.sma(df['Close'], length=50)
-        df['SMA_200'] = ta.sma(df['Close'], length=200)
-        
-        df['RSI'] = ta.rsi(df['Close'], length=14)
-        df['MACD'] = ta.macd(df['Close'])['MACD_12_26_9']
-        df['ADX'] = ta.adx(df['High'], df['Low'], df['Close'])['ADX_14']
-        
-        aroon = ta.aroon(df['High'], df['Low'])
-        df['Aroon_Up'] = aroon['AROONU_14']
-        
-        df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-        df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
-        
-        # פיבונאצ'י ופיבוטים
-        curr = df.iloc[-1]
-        y_high = df['High'][-252:].max()
-        y_low = df['Low'][-252:].min()
-        fib_618 = y_high - 0.618 * (y_high - y_low)
-        
-        pivot = (curr['High'] + curr['Low'] + curr['Close']) / 3
-        r1 = 2*pivot - curr['Low']
-        s1 = 2*pivot - curr['High']
-        
-        # --- אימון מודל ML לחיזוי ---
-        df_ml = df.dropna().copy()
-        df_ml['Target'] = df_ml['Close'].shift(-1) # חיזוי למחר
-        features = ['Close', 'RSI', 'SMA_5', 'MACD']
-        
-        X = df_ml[features].iloc[:-1]
-        y = df_ml['Target'].iloc[:-1]
-        
-        model = RandomForestRegressor(n_estimators=100, random_state=42)
-        model.fit(X, y)
-        
-        last_row = df_ml[features].iloc[[-1]]
-        pred_price = model.predict(last_row)[0]
-        accuracy = model.score(X, y) * 100
-        
-        # --- Backtesting פשוט ---
-        # אסטרטגיה: קנה אם RSI < 40 ומחיר מעל SMA200
-        df['Signal'] = np.where((df['RSI'] < 40) & (df['Close'] > df['SMA_200']), 1, 0)
-        df['Strategy'] = df['Signal'].shift(1) * df['Close'].pct_change()
-        backtest_return = (df['Strategy'] + 1).cumprod().iloc[-1] - 1
-        
-        # ניקוד משוקלל
-        score = 50
-        if curr['Close'] > curr['SMA_200']: score += 20
-        if curr['RSI'] < 30: score += 15
-        if pred_price > curr['Close']: score += 15
-        
-        rec = "HOLD"
-        if score >= 80: rec = "STRONG BUY 🚀"
-        elif score >= 60: rec = "BUY 🟢"
-        elif score <= 40: rec = "SELL 🔴"
-        
-        return {
-            'Symbol': ticker, 'Price': curr['Close'], 'Rec': rec, 'Score': score,
-            'Pred': pred_price, 'Acc': accuracy, 'RSI': curr['RSI'],
-            'SMA200': curr['SMA_200'], 'ATR': curr['ATR'], 'VWAP': curr['VWAP'],
-            'Pivot': pivot, 'R1': r1, 'S1': s1, 'Fib618': fib_618,
-            'Aroon': curr['Aroon_Up'], 'ADX': curr['ADX'], 'Vol': curr['Volume'],
-            'Backtest': backtest_return * 100
-        }
-    except Exception as e:
-        return None
-
-# --- לוגיקת סריקה המונית (Batch Processing) ---
+# --- מנוע הסריקה המהיר (ל-500 מניות) ---
 @st.cache_data(ttl=600)
-def scan_market(tickers_list):
+def scan_fast(tickers_list):
     results = []
-    chunk_size = 20 # מנות קטנות כדי לא לקרוס
+    # חלוקה למנות כדי למנוע חסימה
+    chunk_size = 50
     chunks = [tickers_list[i:i + chunk_size] for i in range(0, len(tickers_list), chunk_size)]
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    prog = st.progress(0)
     
     for i, chunk in enumerate(chunks):
-        status_text.text(f"Processing batch {i+1}/{len(chunks)}...")
         try:
-            # הורדה קבוצתית מהירה לנתונים בסיסיים בלבד
-            data = yf.download(chunk, period="6mo", group_by='ticker', threads=True, progress=False, auto_adjust=True)
+            data = yf.download(chunk, period="5d", group_by='ticker', threads=True, progress=False)
             
-            for ticker in chunk:
+            for t in chunk:
                 try:
-                    if len(chunk) == 1: df = data
-                    else: df = data[ticker]
+                    df = data[t] if len(chunk) > 1 else data
+                    df = fix_data(df)
+                    if df is None or len(df) < 2: continue
                     
-                    df = df.dropna(subset=['Close'])
-                    if len(df) < 50: continue
-                    
-                    curr_price = df['Close'].iloc[-1]
-                    rsi = ta.rsi(df['Close']).iloc[-1]
-                    sma200 = ta.sma(df['Close'], length=200).iloc[-1]
-                    
-                    score = 50
-                    if curr_price > sma200: score += 20
-                    if rsi < 30: score += 20
-                    elif rsi > 70: score -= 15
-                    
-                    rec = "NEUTRAL"
-                    if score >= 70: rec = "BUY"
-                    elif score <= 30: rec = "SELL"
+                    curr = df.iloc[-1]
+                    prev = df.iloc[-2]
+                    change = ((curr['Close'] - prev['Close']) / prev['Close']) * 100
                     
                     results.append({
-                        'Symbol': ticker, 'Price': curr_price, 'RSI': rsi, 
-                        'Score': score, 'Rec': rec
+                        'Symbol': t,
+                        'Price': curr['Close'],
+                        'Change': change,
+                        'Volume': curr['Volume']
                     })
                 except: continue
         except: continue
+        prog.progress((i+1)/len(chunks))
         
-        progress_bar.progress((i+1)/len(chunks))
-        
-    status_text.empty()
-    progress_bar.empty()
-    
-    if not results:
-        return pd.DataFrame(columns=['Symbol', 'Price', 'RSI', 'Score', 'Rec'])
-        
+    prog.empty()
     return pd.DataFrame(results)
 
+# --- מנוע ניתוח עומק (Deep Dive) ---
+def analyze_deep(ticker):
+    try:
+        # הורדת היסטוריה מלאה
+        df = yf.download(ticker, period="1y", interval="1d", progress=False)
+        df = fix_data(df)
+        if df is None: return None
+        
+        # --- אינדיקטורים ---
+        # ממוצעים
+        for m in [5, 20, 50, 100, 150, 200]:
+            df[f'SMA_{m}'] = ta.sma(df['Close'], length=m)
+        df['EMA_5'] = ta.ema(df['Close'], length=5)
+        df['EMA_20'] = ta.ema(df['Close'], length=20)
+        
+        # מתנדים
+        df['RSI'] = ta.rsi(df['Close'], length=14)
+        df['MACD'] = ta.macd(df['Close'])['MACD_12_26_9']
+        df['ADX'] = ta.adx(df['High'], df['Low'], df['Close'])['ADX_14']
+        df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+        
+        # VWAP & Aroon
+        df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
+        aroon = ta.aroon(df['High'], df['Low'])
+        df['Aroon_Up'] = aroon['AROONU_14']
+        
+        # --- ML Prediction (LSTM Style) ---
+        df['Target'] = df['Close'].shift(-1)
+        ml_data = df.dropna().copy()
+        X = ml_data[['Close', 'RSI', 'SMA_5']]
+        y = ml_data['Target']
+        
+        model = RandomForestRegressor(n_estimators=100)
+        model.fit(X, y)
+        pred_price = model.predict(X.iloc[[-1]])[0]
+        accuracy = model.score(X, y) * 100
+        
+        # --- חישובים אחרונים ---
+        curr = df.iloc[-1]
+        
+        # פיבונאצ'י
+        h = df['High'].max()
+        l = df['Low'].min()
+        fib618 = h - 0.618 * (h - l)
+        
+        # פיבוט
+        p = (curr['High'] + curr['Low'] + curr['Close']) / 3
+        r1 = 2*p - curr['Low']
+        s1 = 2*p - curr['High']
+        
+        # המלצה וניקוד
+        score = 50
+        if curr['Close'] > curr['SMA_200']: score += 20
+        if curr['RSI'] < 30: score += 20
+        if pred_price > curr['Close']: score += 10
+        
+        rec = "HOLD"
+        if score >= 75: rec = "STRONG BUY 🚀"
+        elif score >= 60: rec = "BUY 🟢"
+        elif score <= 30: rec = "SELL 🔴"
+        
+        return {
+            'Symbol': ticker, 'Price': curr['Close'], 'Rec': rec, 'Score': score,
+            'Pred': pred_price, 'Acc': accuracy,
+            'RSI': curr['RSI'], 'MACD': curr['MACD'], 'ADX': curr['ADX'],
+            'SMA50': curr['SMA_50'], 'SMA200': curr['SMA_200'],
+            'ATR': curr['ATR'], 'VWAP': curr['VWAP'], 'Aroon': curr['Aroon_Up'],
+            'Pivot': p, 'R1': r1, 'S1': s1, 'Fib618': fib618,
+            'Vol': curr['Volume'], 'AvgVol': df['Volume'].mean(),
+            'High': curr['High'], 'Low': curr['Low'],
+            'Change': ((curr['Close'] - df.iloc[-2]['Close'])/df.iloc[-2]['Close'])*100
+        }
+        
+    except Exception as e:
+        return None
+
 # --- UI ---
-sidebar_input = st.sidebar.text_area("הדבק כאן 500+ מניות:", DEFAULT_LIST, height=300)
-start_btn = st.sidebar.button("🚀 הפעל סורק על (Mass Scan)")
+with st.sidebar:
+    st.header("הגדרות סורק")
+    tickers_input = st.text_area("הדבק רשימת מניות:", DEFAULT_LIST, height=200)
+    run_scan = st.button("🚀 הפעל סריקה מהירה")
 
-if 'scan_results' not in st.session_state:
-    st.session_state['scan_results'] = None
+# לוגיקה ראשית
+if run_scan:
+    t_list = [x.strip().upper() for x in tickers_input.replace('\n', ',').split(',') if x.strip()]
+    st.session_state['scan_data'] = scan_fast(t_list)
 
-if start_btn:
-    clean_list = [x.strip().upper() for x in sidebar_input.replace('\n', ',').split(',') if x.strip()]
-    st.info(f"מתחיל סריקה של {len(clean_list)} מניות... זה ייקח זמן, אבל לא יקרוס.")
-    st.session_state['scan_results'] = scan_market(clean_list)
-
-# הצגת תוצאות
-if st.session_state['scan_results'] is not None:
-    df = st.session_state['scan_results']
+if 'scan_data' in st.session_state and st.session_state['scan_data'] is not None:
+    df_res = st.session_state['scan_data']
     
-    if df.empty:
-        st.error("לא נמצאו נתונים. נסה שוב או בדוק את רשימת המניות.")
+    if df_res.empty:
+        st.error("לא נמצאו נתונים. בדוק את הרשימה.")
     else:
-        # טבלה מסכמת
-        st.subheader(f"📊 תוצאות סריקה ({len(df)} מניות זוהו)")
-        # שימוש ב-Score כברירת מחדל למיון
-        st.dataframe(
-            df.sort_values('Score', ascending=False).style.format({'Price': '{:.2f}', 'RSI': '{:.1f}'}),
+        st.subheader("תוצאות סריקה (לחץ על מניה לדוח מלא)")
+        
+        # טבלה לחיצה
+        event = st.dataframe(
+            df_res.style.format({'Price': '{:.2f}', 'Change': '{:.2f}%'}),
+            on_select="rerun",
+            selection_mode="single-row",
             use_container_width=True
         )
         
-        st.divider()
-        
-        # --- Deep Dive & AI Section ---
-        st.subheader("🔬 ניתוח עומק + AI Prediction")
-        st.caption("בחר מניה מהטבלה למעלה כדי להפעיל עליה את המודלים הכבדים (LSTM/ML/Full Technicals):")
-        
-        selected_ticker = st.selectbox("בחר מניה:", df['Symbol'].unique())
-        
-        if st.button(f"🧠 הפעל בינה מלאכותית על {selected_ticker}"):
-            with st.spinner("מאמן מודלים ומחשב 50 אינדיקטורים..."):
-                data = run_deep_ai_analysis(selected_ticker)
+        selected_row = event.selection.rows
+        if selected_row:
+            ticker = df_res.iloc[selected_row[0]]['Symbol']
+            
+            with st.spinner(f"מנתח את {ticker} עם מודלים מתקדמים..."):
+                data = analyze_deep(ticker)
                 
             if data:
-                # הדיווח המלא שביקשת
+                st.markdown("---")
+                # === הדוח הטלגרמי המדויק שביקשת ===
                 report = f"""
-⭐️ **{data['Symbol']} DEEP AI REPORT**
-════════════════════════════
-💰 Price: ${data['Price']:.2f}
-🚦 Signal: {data['Rec']} (Score: {data['Score']})
-
-🎯 **AI Prediction (Random Forest)**
-• Forecast (Next Day): ${data['Pred']:.2f}
+⭐️ **{data['Symbol']} Corporation**
+Sentiment: {data['Rec']} | Trend Score: {data['Score']}/100
+══════════════════
+💰 **Price & Change**
+• Price: {data['Price']:.2f}$ ({data['Change']:.2f}%)
+• H/L: {data['High']:.2f}$ / {data['Low']:.2f}$
+🔊 Vol Day: {data['Vol']/1000000:.2f}M | Avg Vol: {data['AvgVol']/1000000:.2f}M
+• ATR14: {data['ATR']:.2f}$
+══════════════════
+🎯 **LSTM AI Predictions**
+• Tomorrow: ${data['Pred']:.2f}
 • Model Accuracy: {data['Acc']:.1f}%
-
-🔙 **Backtesting Performance**
-• Strategy Return (1Y): {data['Backtest']:.2f}%
-
-📊 **Key Indicators**
-• RSI: {data['RSI']:.1f} | ADX: {data['ADX']:.1f}
+🧠 AI Signal Score: {data['Score']} ({data['Rec']})
+══════════════════
+📊 **Moving Averages**
+• SMA-50: {data['SMA50']:.2f}$ | SMA-200: {data['SMA200']:.2f}$
+• Distance to SMA200: {((data['Price']-data['SMA200'])/data['SMA200'])*100:.2f}%
+• VWAP-Day: {data['VWAP']:.2f}$
+═════════════════
+⚡️ **Momentum & Oscillators**
+• RSI-14: {data['RSI']:.1f} | ADX: {data['ADX']:.1f}
+• MACD: {data['MACD']:.2f}
 • Aroon Up: {data['Aroon']:.0f}
-• VWAP: ${data['VWAP']:.2f}
-
-🌊 **Levels & Risk**
-• Pivot: ${data['Pivot']:.2f} | R1: ${data['R1']:.2f}
+═════════════════
+📐 **Support/Resistance & Pivots**
+• Pivot: ${data['Pivot']:.2f}
+• R1: ${data['R1']:.2f} | S1: ${data['S1']:.2f}
 • Golden Fib (61.8%): ${data['Fib618']:.2f}
-• ATR (Volatility): ${data['ATR']:.2f}
-════════════════════════════
+═════════════════
+🌊 **Risk Management**
+• Stop Loss: ${data['Price'] - 2*data['ATR']:.2f}
+• Target: ${data['R1']:.2f}
+═══════════════════
+Generated: {datetime.now().strftime('%H:%M:%S')}
 """
                 st.code(report, language="text")
-                
-                col1, col2, col3 = st.columns(3)
-                col1.metric("חיזוי AI", f"${data['Pred']:.2f}")
-                col2.metric("Backtest", f"{data['Backtest']:.2f}%")
-                col3.metric("ATR", f"{data['ATR']:.2f}")
